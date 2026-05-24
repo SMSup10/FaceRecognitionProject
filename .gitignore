@@ -1,0 +1,35 @@
+# Visual Studio
+.vs/
+*.VC.db
+*.VC.opendb
+
+# Build folders
+x64/
+Debug/
+Release/
+build/
+
+# CMake
+CMakeFiles/
+CMakeCache.txt
+
+# User files
+*.user
+*.suo
+
+# Temporary
+*.log
+*.tmp
+
+# Executables
+*.exe
+*.obj
+*.pdb
+*.ilk
+
+# Dlib models
+*.dat
+
+# Videos
+*.mp4
+*.avi
