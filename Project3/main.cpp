@@ -514,7 +514,7 @@ public:
 
         {
 
-            return "Human";
+            return "Unknown";
 
         }
 
@@ -826,27 +826,56 @@ void faceWorker(FaceRecognitionSystem& faceSystem)
 {
     while (running)
     {
-        if (paused) {
+        if (paused)
+        {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
             continue;
         }
 
         cv::Mat localFrame;
+
+        // 공유 프레임 복사
         {
             std::lock_guard<std::mutex> lock(frameMutex);
-            if (sharedFrame.empty()) continue;
+
+            if (sharedFrame.empty())
+                continue;
+
             localFrame = sharedFrame.clone();
         }
 
-        // 여기서 얼굴 인식을 수행하고 localFrame에 그림
-        faceSystem.processFrame(localFrame);
+        // =========================
+        // 속도 최적화용 축소 프레임
+        // =========================
 
+        cv::Mat smallFrame;
+
+        cv::resize(
+            localFrame,
+            smallFrame,
+            cv::Size(),
+            0.5,
+            0.5
+        );
+
+        // 축소된 프레임으로 얼굴 인식 수행
+        faceSystem.processFrame(smallFrame);
+
+        // =========================
+        // 결과 저장
+        // =========================
         {
             std::lock_guard<std::mutex> lock(frameMutex);
-            // 인식 결과가 그려진 프레임을 공유 변수에 반영
-            sharedFrame = localFrame;
+
+            // 현재는 축소된 화면 저장
+            // (속도 우선)
+            sharedFrame = smallFrame.clone();
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(1)); // CPU 점유율 조절
+
+        // CPU 점유율 조절
+        std::this_thread::sleep_for(
+            std::chrono::milliseconds(1)
+        );
     }
 }
 
@@ -1046,9 +1075,10 @@ int main()
 
                     cv::imshow("Image Mode", frame);
 
+                    int key = cv::waitKey(700);
 
-
-                    if (cv::waitKey(0) == 27) break;
+                    if (key == 27)
+                        break;
 
                 }
 
