@@ -263,7 +263,7 @@ public:
 
         const string& recognitionModelPath,
 
-        double threshold = 0.7
+        double threshold = 0.75
 
     )
 
@@ -409,7 +409,7 @@ public:
 
         cv_image<bgr_pixel> cimg(image);
 
-        std::vector<rectangle> faces = detector_(cimg,1);
+        std::vector<rectangle> faces = detector_(cimg, 1);
 
         std::vector<matrix<rgb_pixel>> faceChips;
 
@@ -431,7 +431,7 @@ public:
 
                 cimg,
 
-                get_face_chip_details(shape, 150, 0.25),
+                get_face_chip_details(shape, 150, 0.15),
 
                 faceChip
 
@@ -515,7 +515,7 @@ public:
 
         cv_image<bgr_pixel> cimg(frame);
 
-        std::vector<rectangle> faces = detector_(cimg,1);
+        std::vector<rectangle> faces = detector_(cimg, 1);
 
 
 
@@ -839,8 +839,8 @@ void faceWorker(FaceRecognitionSystem& faceSystem)
             localFrame,
             smallFrame,
             cv::Size(),
-            0.75,
-            0.75
+            0.6,
+            0.6
         );
 
         // 얼굴 탐지
