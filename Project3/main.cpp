@@ -221,13 +221,14 @@ using anet_type = loss_metric <
 
 
 struct FaceRecord
-
 {
-
     string name;
 
+    // 여러 장 평균 descriptor
     matrix<float, 0, 1> descriptor;
 
+    // 학습된 사진 개수
+    int sampleCount = 0;
 };
 
 
@@ -262,7 +263,7 @@ public:
 
         const string& recognitionModelPath,
 
-        double threshold = 0.75
+        double threshold = 0.7
 
     )
 
@@ -293,117 +294,99 @@ public:
 
 
     void loadKnownFaces(const string& folderPath)
-
     {
-
         cout << "[Known Faces] Folder path: " << folderPath << endl;
 
-
-
         if (!fs::exists(folderPath))
-
         {
-
             throw runtime_error("known_faces folder not found: " + folderPath);
-
         }
 
-
-
         for (const auto& entry : fs::directory_iterator(folderPath))
-
         {
-
             if (!entry.is_regular_file())
-
-            {
-
                 continue;
-
-            }
-
-
 
             const string path = entry.path().string();
-
             const string filename = entry.path().stem().string();
-
             const string extension = entry.path().extension().string();
 
-
-
             if (!isImageFile(extension))
-
-            {
-
-                cout << "[Skipped] Not an image file: " << path << endl;
-
                 continue;
-
-            }
-
-
 
             string name = extractName(filename);
 
-
-
             cv::Mat image = cv::imread(path);
 
-
-
             if (image.empty())
-
             {
-
                 cout << "[Warning] Failed to load image: " << path << endl;
-
                 continue;
-
             }
-
-
 
             auto descriptors = extractDescriptors(image);
 
-
-
             if (descriptors.empty())
-
             {
-
                 cout << "[Warning] No face detected in image: " << path << endl;
-
                 continue;
-
             }
 
+            matrix<float, 0, 1> desc = descriptors[0];
 
+            bool found = false;
 
-            knownFaces_.push_back(FaceRecord{ name, descriptors[0] });
+            // =========================
+            // 같은 이름이면 평균 학습
+            // =========================
 
+            for (auto& known : knownFaces_)
+            {
+                if (known.name == name)
+                {
+                    known.descriptor =
+                        (known.descriptor * known.sampleCount + desc)
+                        / (known.sampleCount + 1);
 
+                    known.sampleCount++;
 
-            cout << "[Registered] " << name << " : " << path << endl;
+                    found = true;
 
+                    cout << "[Updated] "
+                        << name
+                        << " samples: "
+                        << known.sampleCount
+                        << endl;
+
+                    break;
+                }
+            }
+
+            // =========================
+            // 새 인물 등록
+            // =========================
+
+            if (!found)
+            {
+                FaceRecord record;
+
+                record.name = name;
+                record.descriptor = desc;
+                record.sampleCount = 1;
+
+                knownFaces_.push_back(record);
+
+                cout << "[Registered] "
+                    << name
+                    << " : "
+                    << path
+                    << endl;
+            }
         }
 
-
-
-        cout << "[Known Faces] Total registered faces: "
-
-            << knownFaces_.size() << endl;
-
-
-
-        if (knownFaces_.empty())
-
-        {
-
-            throw runtime_error("No registered faces found. Check the known_faces folder.");
-
-        }
-
+        cout << "[Known Faces] Total registered people: "
+            << knownFaces_.size()
+            << endl;
     }
 
 
@@ -426,7 +409,7 @@ public:
 
         cv_image<bgr_pixel> cimg(image);
 
-        std::vector<rectangle> faces = detector_(cimg);
+        std::vector<rectangle> faces = detector_(cimg,1);
 
         std::vector<matrix<rgb_pixel>> faceChips;
 
@@ -532,7 +515,7 @@ public:
 
         cv_image<bgr_pixel> cimg(frame);
 
-        std::vector<rectangle> faces = detector_(cimg);
+        std::vector<rectangle> faces = detector_(cimg,1);
 
 
 
@@ -828,13 +811,15 @@ void faceWorker(FaceRecognitionSystem& faceSystem)
     {
         if (paused)
         {
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(10)
+            );
             continue;
         }
 
         cv::Mat localFrame;
 
-        // 공유 프레임 복사
+        // 원본 프레임 복사
         {
             std::lock_guard<std::mutex> lock(frameMutex);
 
@@ -854,25 +839,59 @@ void faceWorker(FaceRecognitionSystem& faceSystem)
             localFrame,
             smallFrame,
             cv::Size(),
-            0.5,
-            0.5
+            0.75,
+            0.75
         );
 
-        // 축소된 프레임으로 얼굴 인식 수행
-        faceSystem.processFrame(smallFrame);
+        // 얼굴 탐지
+        cv_image<bgr_pixel> cimg(smallFrame);
+
+        auto faces = faceSystem.detectFaces(smallFrame);
+
+        // =========================
+        // 좌표 복원
+        // =========================
+
+        for (auto& face : faces)
+        {
+            int left = face.left() * 2;
+            int top = face.top() * 2;
+            int right = face.right() * 2;
+            int bottom = face.bottom() * 2;
+
+            cv::rectangle(
+                localFrame,
+                cv::Rect(
+                    left,
+                    top,
+                    right - left,
+                    bottom - top
+                ),
+                cv::Scalar(0, 255, 0),
+                2
+            );
+
+            cv::putText(
+                localFrame,
+                "Human",
+                cv::Point(left, top - 10),
+                cv::FONT_HERSHEY_SIMPLEX,
+                0.8,
+                cv::Scalar(0, 255, 0),
+                2
+            );
+        }
 
         // =========================
         // 결과 저장
         // =========================
+
         {
             std::lock_guard<std::mutex> lock(frameMutex);
 
-            // 현재는 축소된 화면 저장
-            // (속도 우선)
-            sharedFrame = smallFrame.clone();
+            resultFrame = localFrame.clone();
         }
 
-        // CPU 점유율 조절
         std::this_thread::sleep_for(
             std::chrono::milliseconds(1)
         );
@@ -1075,7 +1094,7 @@ int main()
 
                     cv::imshow("Image Mode", frame);
 
-                    int key = cv::waitKey(700);
+                    int key = cv::waitKey(150);
 
                     if (key == 27)
                         break;
