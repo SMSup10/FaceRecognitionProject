@@ -263,7 +263,7 @@ public:
 
         const string& recognitionModelPath,
 
-        double threshold = 0.75
+        double threshold = 0.65
 
     )
 
@@ -397,66 +397,61 @@ public:
 
         cv_image<bgr_pixel> cimg(frame);
 
-        return detector_(cimg);
+        return detector_(cimg,1);
 
     }
 
 
 
     std::vector<matrix<float, 0, 1>> extractDescriptors(cv::Mat& image)
-
     {
-
         cv_image<bgr_pixel> cimg(image);
 
         std::vector<rectangle> faces = detector_(cimg, 1);
 
         std::vector<matrix<rgb_pixel>> faceChips;
 
-
-
         for (const auto& face : faces)
-
         {
-
             auto shape = landmarkModel_(cimg, face);
-
-
 
             matrix<rgb_pixel> faceChip;
 
-
-
             extract_image_chip(
-
                 cimg,
-
-                get_face_chip_details(shape, 150, 0.15),
-
+                get_face_chip_details(shape, 150, 0.25),
                 faceChip
-
             );
 
-
-
             faceChips.push_back(std::move(faceChip));
-
         }
-
-
 
         if (faceChips.empty())
-
         {
-
             return {};
-
         }
 
+        std::vector<matrix<float, 0, 1>> descriptors;
 
+        for (auto& chip : faceChips)
+        {
+            auto jittered = jitterImage(chip);
 
-        return recognitionNet_(faceChips);
+            auto emb = recognitionNet_(jittered);
 
+            matrix<float, 0, 1> mean = emb[0];
+
+            for (size_t i = 1; i < emb.size(); ++i)
+            {
+                mean += emb[i];
+            }
+
+            mean /= emb.size();
+
+            descriptors.push_back(mean);
+        }
+
+        return descriptors;
     }
 
 
@@ -512,11 +507,13 @@ public:
     void processFrame(cv::Mat& frame)
 
     {
-
+        cout << "[processFrame Open]" << endl;
         cv_image<bgr_pixel> cimg(frame);
 
         std::vector<rectangle> faces = detector_(cimg, 1);
-
+        cout << "Detected Faces: "
+            << faces.size()
+            << endl;
 
 
         std::vector<matrix<rgb_pixel>> faceChips;
@@ -590,6 +587,23 @@ public:
 
 
 private:
+    std::vector<matrix<rgb_pixel>> jitterImage(
+        const matrix<rgb_pixel>& img
+    )
+    {
+        thread_local dlib::rand rnd;
+
+        std::vector<matrix<rgb_pixel>> crops;
+
+        for (int i = 0; i < 10; ++i)
+        {
+            crops.push_back(
+                dlib::jitter_image(img, rnd)
+            );
+        }
+
+        return crops;
+    }
 
     bool isImageFile(const string& extension)
 
@@ -807,6 +821,8 @@ public:
 
 void faceWorker(FaceRecognitionSystem& faceSystem)
 {
+    const double resizeScale = 1.0;
+
     while (running)
     {
         if (paused)
@@ -819,18 +835,19 @@ void faceWorker(FaceRecognitionSystem& faceSystem)
 
         cv::Mat localFrame;
 
-        // 원본 프레임 복사
         {
             std::lock_guard<std::mutex> lock(frameMutex);
 
             if (sharedFrame.empty())
+            {
                 continue;
+            }
 
             localFrame = sharedFrame.clone();
         }
 
         // =========================
-        // 속도 최적화용 축소 프레임
+        // 속도 최적화용 축소
         // =========================
 
         cv::Mat smallFrame;
@@ -839,52 +856,25 @@ void faceWorker(FaceRecognitionSystem& faceSystem)
             localFrame,
             smallFrame,
             cv::Size(),
-            0.6,
-            0.6
+            resizeScale,
+            resizeScale
         );
 
-        // 얼굴 탐지
-        cv_image<bgr_pixel> cimg(smallFrame);
-
-        auto faces = faceSystem.detectFaces(smallFrame);
-
         // =========================
-        // 좌표 복원
+        // 실제 얼굴 인식 수행
         // =========================
 
-        for (auto& face : faces)
-        {
-            int left = face.left() * 2;
-            int top = face.top() * 2;
-            int right = face.right() * 2;
-            int bottom = face.bottom() * 2;
-
-            cv::rectangle(
-                localFrame,
-                cv::Rect(
-                    left,
-                    top,
-                    right - left,
-                    bottom - top
-                ),
-                cv::Scalar(0, 255, 0),
-                2
-            );
-
-            cv::putText(
-                localFrame,
-                "Human",
-                cv::Point(left, top - 10),
-                cv::FONT_HERSHEY_SIMPLEX,
-                0.8,
-                cv::Scalar(0, 255, 0),
-                2
-            );
-        }
+        faceSystem.processFrame(smallFrame);
 
         // =========================
-        // 결과 저장
+        // 결과 확대 복원
         // =========================
+
+        cv::resize(
+            smallFrame,
+            localFrame,
+            localFrame.size()
+        );
 
         {
             std::lock_guard<std::mutex> lock(frameMutex);
@@ -1182,13 +1172,16 @@ int main()
                     cv::Mat render;
 
                     {
-
                         std::lock_guard<std::mutex> lock(frameMutex);
 
-                        if (!sharedFrame.empty())
-
+                        if (!resultFrame.empty())
+                        {
+                            render = resultFrame.clone();
+                        }
+                        else if (!sharedFrame.empty())
+                        {
                             render = sharedFrame.clone();
-
+                        }
                     }
 
 
@@ -1196,6 +1189,18 @@ int main()
                     if (!render.empty()) {
 
                         drawVideoUI(render, status);
+
+                        double fps = fpsCounter.update();
+
+                        cv::putText(
+                            render,
+                            "FPS: " + std::to_string((int)fps),
+                            cv::Point(20, 80),
+                            cv::FONT_HERSHEY_SIMPLEX,
+                            0.8,
+                            cv::Scalar(255, 255, 0),
+                            2
+                        );
 
                         cv::imshow("AI Video Player", render);
 
